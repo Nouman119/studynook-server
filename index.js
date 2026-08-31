@@ -250,6 +250,25 @@ async function run() {
       }
     });
 
+    app.post('/api/bookings', verifyToken, async (req, res) => {
+      try {
+        const bookingData = req.body;
+        const userEmail = req.user.email;
+
+        const newBooking = {
+          ...bookingData,
+          userEmail,
+          createdAt: new Date(),
+          status: 'confirmed'
+        };
+
+        const result = await bookingsCollection.insertOne(newBooking);
+        res.json({ success: true, message: 'Room booked successfully', insertedId: result.insertedId });
+      } catch (error) {
+        res.status(500).json({ message: 'Failed to book room', error: error.message });
+      }
+    });
+
     app.get('/api/my-rooms', verifyToken, async (req, res) => {
       try {
         const userEmail = req.user.email;
