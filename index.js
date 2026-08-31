@@ -350,6 +350,23 @@ async function run() {
 
 run().catch(console.dir);
 
+
+// নতুন রুম যোগ করার পোস্ট রিকোয়েস্ট (এখানে বসবে)
+app.post('/api/rooms', async (req, res) => {
+  try {
+    const roomData = req.body;
+    roomData.createdAt = new Date();
+
+    const result = await roomsCollection.insertOne(roomData);
+    res.status(201).json({ success: true, insertedId: result.insertedId, message: 'Room added successfully' });
+  } catch (error) {
+    console.error('Error adding room:', error);
+    res.status(500).json({ success: false, message: 'Failed to add room' });
+  }
+});
+
+
+
 app.listen(port, () => {
   console.log(`StudyNook Server running on port ${port}`);
 });
