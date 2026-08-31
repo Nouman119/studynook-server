@@ -189,6 +189,39 @@ async function run() {
       }
     });
 
+    // ২. নির্দিষ্ট রুম ডিলিট করার এপিআই
+    app.delete('/api/rooms/:id', verifyToken, async (req, res) => {
+      try {
+        const { id } = req.params;
+        const userEmail = req.user.email;
+
+        // শুধু যে ক্রিয়েটর সেই যেন ডিলিট করতে পারে তা নিশ্চিত করা
+        const room = await roomsCollection.findOne({ _id: new ObjectId(id) });
+        if (!room) {
+          return res.status(404).json({ message: 'Room not found' });
+        }
+
+        if (room.creatorEmail !== userEmail) {
+          return res.status(403).json({ message: 'Unauthorized: You can only delete your own listings' });
+        }
+
+        const result = await roomsCollection.deleteOne({ _id: new ObjectId(id) });
+        res.json({ success: true, message: 'Room deleted successfully', result });
+      } catch (error) {
+        res.status(500).json({ message: 'Failed to delete room', error: error.message });
+      }
+    });
+
+    app.get('/api/my-rooms', verifyToken, async (req, res) => {
+      try {
+        const userEmail = req.user.email;
+        const myRooms = await roomsCollection.find({ creatorEmail: userEmail }).toArray();
+        res.json({ success: true, count: myRooms.length, data: myRooms });
+      } catch (error) {
+        res.status(500).json({ message: 'Failed to fetch your listings', error: error.message });
+      }
+    });
+    
     app.get('/api/rooms/:id', async (req, res) => {
       try {
         const { id } = req.params;
@@ -344,7 +377,6 @@ async function run() {
 
     console.log("Successfully connected to MongoDB!");
 
-    // সার্ভার লিসেন রান ফাংশনের ভেতরে রাখা হয়েছে যাতে কালেকশন স্কোপ সঠিকভাবে পায়
     app.listen(port, () => {
       console.log(`StudyNook Server running on port ${port}`);
     });
