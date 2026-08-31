@@ -189,6 +189,44 @@ async function run() {
       }
     });
 
+    // নির্দিষ্ট রুমের তথ্য আপডেট (Edit/Update Room) করার এপিআই
+    app.patch('/api/rooms/:id', verifyToken, async (req, res) => {
+      try {
+        const { id } = req.params;
+        const userEmail = req.user.email;
+        const updatedData = req.body;
+
+        const room = await roomsCollection.findOne({ _id: new ObjectId(id) });
+        if (!room) {
+          return res.status(404).json({ message: 'Room not found' });
+        }
+
+        if (room.creatorEmail !== userEmail) {
+          return res.status(403).json({ message: 'Unauthorized: You can only edit your own listings' });
+        }
+
+        const result = await roomsCollection.updateOne(
+          { _id: new ObjectId(id) },
+          {
+            $set: {
+              title: updatedData.title,
+              description: updatedData.description,
+              category: updatedData.category,
+              pricePerHour: Number(updatedData.pricePerHour),
+              capacity: Number(updatedData.capacity),
+              location: updatedData.location,
+              images: updatedData.images || room.images,
+            }
+          }
+        );
+
+        res.json({ success: true, message: 'Room updated successfully', result });
+      } catch (error) {
+        res.status(500).json({ message: 'Failed to update room', error: error.message });
+      }
+    });
+
+
     // ২. নির্দিষ্ট রুম ডিলিট করার এপিআই
     app.delete('/api/rooms/:id', verifyToken, async (req, res) => {
       try {
@@ -221,7 +259,7 @@ async function run() {
         res.status(500).json({ message: 'Failed to fetch your listings', error: error.message });
       }
     });
-    
+
     app.get('/api/rooms/:id', async (req, res) => {
       try {
         const { id } = req.params;
