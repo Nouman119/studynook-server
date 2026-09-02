@@ -29,6 +29,7 @@ const client = new MongoClient(uri, {
   }
 });
 
+// Middleware to verify JWT token from HttpOnly cookie
 const verifyToken = (req, res, next) => {
   const token = req.cookies?.token;
 
@@ -54,6 +55,7 @@ async function run() {
     const roomsCollection = db.collection('rooms');
     const bookingsCollection = db.collection('bookings');
 
+    // 1. User Registration
     app.post('/api/auth/register', async (req, res) => {
       try {
         const { name, email, photoURL, password } = req.body;
@@ -85,6 +87,7 @@ async function run() {
       }
     });
 
+    // 2. User Login & Google OAuth handling
     app.post('/api/auth/login', async (req, res) => {
       try {
         const { email, password, isGoogleLogin, name, photoURL } = req.body;
@@ -139,6 +142,7 @@ async function run() {
       }
     });
 
+    // 3. Logout Route
     app.post('/api/auth/logout', (req, res) => {
       res.clearCookie('token', {
         httpOnly: true,
@@ -147,6 +151,7 @@ async function run() {
       }).json({ success: true, message: 'Logged out successfully' });
     });
 
+    // 4. Current User Session Check
     app.get('/api/auth/me', verifyToken, async (req, res) => {
       try {
         const user = await usersCollection.findOne(
@@ -162,6 +167,7 @@ async function run() {
       }
     });
 
+    // 5. Get All Rooms (with search, category, sort)
     app.get('/api/rooms', async (req, res) => {
       try {
         const { search, category, sort } = req.query;
@@ -189,7 +195,63 @@ async function run() {
       }
     });
 
-    // নির্দিষ্ট রুমের তথ্য আপডেট (Edit/Update Room) করার এপিআই
+    // 6. User's Created Listings
+    app.get('/api/my-rooms', verifyToken, async (req, res) => {
+      try {
+        const userEmail = req.user.email;
+        const myRooms = await roomsCollection.find({ creatorEmail: userEmail }).toArray();
+        res.json({ success: true, count: myRooms.length, data: myRooms });
+      } catch (error) {
+        res.status(500).json({ message: 'Failed to fetch your listings', error: error.message });
+      }
+    });
+
+    // 7. Get Single Room Details
+    app.get('/api/rooms/:id', async (req, res) => {
+      try {
+        const { id } = req.params;
+        const room = await roomsCollection.findOne({ _id: new ObjectId(id) });
+
+        if (!room) {
+          return res.status(404).json({ message: 'Study room not found' });
+        }
+
+        res.json({ success: true, data: room });
+      } catch (error) {
+        res.status(500).json({ message: 'Failed to fetch room details', error: error.message });
+      }
+    });
+
+    // 8. Create a New Room Listing
+    app.post('/api/rooms', verifyToken, async (req, res) => {
+      try {
+        const { title, description, category, pricePerHour, capacity, amenities, images, location } = req.body;
+
+        const newRoom = {
+          title,
+          description,
+          category,
+          pricePerHour: Number(pricePerHour),
+          capacity: Number(capacity),
+          amenities: amenities || [],
+          images: images || [],
+          location,
+          creatorEmail: req.user.email,
+          createdAt: new Date()
+        };
+
+        const result = await roomsCollection.insertOne(newRoom);
+        res.status(201).json({
+          success: true,
+          message: 'Study room added successfully',
+          insertedId: result.insertedId
+        });
+      } catch (error) {
+        res.status(500).json({ message: 'Failed to add study room', error: error.message });
+      }
+    });
+
+    // 9. Update Room Listing
     app.patch('/api/rooms/:id', verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
@@ -226,14 +288,12 @@ async function run() {
       }
     });
 
-
-    // ২. নির্দিষ্ট রুম ডিলিট করার এপিআই
+    // 10. Delete Room Listing
     app.delete('/api/rooms/:id', verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const userEmail = req.user.email;
 
-        // শুধু যে ক্রিয়েটর সেই যেন ডিলিট করতে পারে তা নিশ্চিত করা
         const room = await roomsCollection.findOne({ _id: new ObjectId(id) });
         if (!room) {
           return res.status(404).json({ message: 'Room not found' });
@@ -250,145 +310,104 @@ async function run() {
       }
     });
 
+    // 11. Section 7.3: Advanced Booking Logic ($gte & $lte Overlap Conflict Check)
     app.post('/api/bookings', verifyToken, async (req, res) => {
       try {
-        const bookingData = req.body;
-        const userEmail = req.user.email;
+        const { 
+          roomId, 
+          roomTitle, 
+          startTime, 
+          endTime, 
+          totalPrice, 
+          date, 
+          timeSlot, 
+          price 
+        } = req.body;
 
-        const newBooking = {
-          ...bookingData,
-          userEmail,
-          createdAt: new Date(),
-          status: 'confirmed'
-        };
+        let bookingStart;
+        let bookingEnd;
+        let finalPrice = Number(totalPrice || price || 0);
 
-        const result = await bookingsCollection.insertOne(newBooking);
-        res.json({ success: true, message: 'Room booked successfully', insertedId: result.insertedId });
-      } catch (error) {
-        res.status(500).json({ message: 'Failed to book room', error: error.message });
-      }
-    });
-
-    app.get('/api/my-rooms', verifyToken, async (req, res) => {
-      try {
-        const userEmail = req.user.email;
-        const myRooms = await roomsCollection.find({ creatorEmail: userEmail }).toArray();
-        res.json({ success: true, count: myRooms.length, data: myRooms });
-      } catch (error) {
-        res.status(500).json({ message: 'Failed to fetch your listings', error: error.message });
-      }
-    });
-
-    app.get('/api/rooms/:id', async (req, res) => {
-      try {
-        const { id } = req.params;
-        const room = await roomsCollection.findOne({ _id: new ObjectId(id) });
-
-        if (!room) {
-          return res.status(404).json({ message: 'Study room not found' });
+        // Date and Time parsing
+        if (startTime && endTime) {
+          bookingStart = new Date(startTime);
+          bookingEnd = new Date(endTime);
+        } else if (date && timeSlot) {
+          const parts = timeSlot.split('-');
+          if (parts.length === 2) {
+            bookingStart = new Date(`${date} ${parts[0].trim()}`);
+            bookingEnd = new Date(`${date} ${parts[1].trim()}`);
+          } else {
+            bookingStart = new Date(date);
+            bookingEnd = new Date(new Date(date).getTime() + 60 * 60 * 1000);
+          }
+        } else {
+          return res.status(400).json({ 
+            success: false, 
+            message: 'Invalid booking date or time details.' 
+          });
         }
 
-        res.json({ success: true, data: room });
-      } catch (error) {
-        res.status(500).json({ message: 'Failed to fetch room details', error: error.message });
-      }
-    });
+        // Validation: Start time must precede End time
+        if (bookingStart >= bookingEnd) {
+          return res.status(400).json({ 
+            success: false, 
+            message: 'End time must be after start time.' 
+          });
+        }
 
-    app.post('/api/rooms', verifyToken, async (req, res) => {
-      try {
-        const { title, description, category, pricePerHour, capacity, amenities, images, location } = req.body;
+        // Section 7.3: Booking conflict check using $gte and $lte to prevent overlapping bookings
+        const conflictingBooking = await bookingsCollection.findOne({
+          roomId: roomId,
+          status: 'confirmed',
+          $and: [
+            { startTime: { $lte: bookingEnd } },
+            { endTime: { $gte: bookingStart } }
+          ]
+        });
 
-        const newRoom = {
-          title,
-          description,
-          category,
-          pricePerHour: Number(pricePerHour),
-          capacity: Number(capacity),
-          amenities: amenities || [],
-          images: images || [],
-          location,
-          creatorEmail: req.user.email,
+        if (conflictingBooking) {
+          return res.status(409).json({
+            success: false,
+            message: 'This study room is already booked for the selected time slot. Please choose another time.'
+          });
+        }
+
+        const newBooking = {
+          roomId,
+          roomTitle,
+          userEmail: req.user.email,
+          userName: req.body.userName || req.user.email,
+          date: date || bookingStart.toISOString().split('T')[0],
+          timeSlot: timeSlot || `${bookingStart.toLocaleTimeString()} - ${bookingEnd.toLocaleTimeString()}`,
+          startTime: bookingStart,
+          endTime: bookingEnd,
+          price: finalPrice,
+          totalPrice: finalPrice,
+          status: 'confirmed',
           createdAt: new Date()
         };
 
-        const result = await roomsCollection.insertOne(newRoom);
-        res.status(201).json({
-          success: true,
-          message: 'Study room added successfully',
-          insertedId: result.insertedId
-        });
-      } catch (error) {
-        res.status(500).json({ message: 'Failed to add study room', error: error.message });
-      }
-    });
-
-    app.post('/api/bookings', verifyToken, async (req, res) => {
-      try {
-        const { roomId, roomTitle, startTime, endTime, totalPrice, date, timeSlot, price } = req.body;
-
-        let newBooking;
-
-        if (date && timeSlot) {
-          newBooking = {
-            roomId,
-            roomTitle,
-            userEmail: req.user.email,
-            userName: req.body.userName || req.user.email,
-            date,
-            timeSlot,
-            price: Number(price || 0),
-            status: 'Pending',
-            createdAt: new Date()
-          };
-        } else {
-          const requestedStart = new Date(startTime);
-          const requestedEnd = new Date(endTime);
-
-          if (requestedStart >= requestedEnd) {
-            return res.status(400).json({ message: 'End time must be after start time' });
-          }
-
-          const conflictingBooking = await bookingsCollection.findOne({
-            roomId,
-            status: 'confirmed',
-            $or: [
-              {
-                startTime: { $lt: requestedEnd },
-                endTime: { $gt: requestedStart }
-              }
-            ]
-          });
-
-          if (conflictingBooking) {
-            return res.status(409).json({
-              message: 'This study room is already booked for the selected time slot. Please choose another time.'
-            });
-          }
-
-          newBooking = {
-            roomId,
-            roomTitle,
-            userEmail: req.user.email,
-            startTime: requestedStart,
-            endTime: requestedEnd,
-            totalPrice: Number(totalPrice),
-            status: 'confirmed',
-            createdAt: new Date()
-          };
-        }
-
         const result = await bookingsCollection.insertOne(newBooking);
+
         res.status(201).json({
           success: true,
           message: 'Room booked successfully!',
           bookingId: result.insertedId,
-          ...newBooking
+          booking: newBooking
         });
+
       } catch (error) {
-        res.status(500).json({ message: 'Failed to create booking', error: error.message });
+        console.error('Booking creation error:', error);
+        res.status(500).json({ 
+          success: false, 
+          message: 'Failed to create booking', 
+          error: error.message 
+        });
       }
     });
 
+    // 12. Get User's Own Bookings
     app.get('/api/bookings/my-bookings', verifyToken, async (req, res) => {
       try {
         const userEmail = req.user.email;
@@ -403,6 +422,7 @@ async function run() {
       }
     });
 
+    // 13. Cancel a Booking
     app.patch('/api/bookings/:id/cancel', verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
@@ -428,6 +448,7 @@ async function run() {
       }
     });
 
+    // Root check
     app.get('/', (req, res) => {
       res.send('StudyNook API Server is running smoothly.');
     });
