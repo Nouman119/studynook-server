@@ -30,7 +30,15 @@ const client = new MongoClient(uri, {
   }
 });
 
-// Middleware to verify JWT token from HttpOnly cookie or Authorization header
+// PDF 7.1: Cookie configuration
+const cookieOptions = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'strict',
+  maxAge: 7 * 24 * 60 * 60 * 1000 // 7 days
+};
+
+// PDF 7.1: authMiddleware (Read token from req.cookies.token, verify JWT, attach req.user = { id: userId }, return 401 if invalid or expired)
 const verifyToken = (req, res, next) => {
   const token = req.cookies?.token || req.headers?.authorization?.split(' ')[1];
 
@@ -42,7 +50,12 @@ const verifyToken = (req, res, next) => {
     if (err) {
       return res.status(401).json({ success: false, message: 'Unauthorized access: Invalid or expired token' });
     }
-    req.user = decoded;
+    const resolvedId = decoded.userId || decoded.id;
+    req.user = {
+      id: resolvedId,
+      userId: resolvedId,
+      email: decoded.email
+    };
     next();
   });
 };
@@ -92,7 +105,7 @@ async function run() {
       }
     });
 
-    // 2. User Login & Google OAuth handling
+    // 2. User Login & Google OAuth (PDF 7.1: JWT with userId, stored in HTTP-Only Cookie)
     app.post('/api/auth/login', async (req, res) => {
       try {
         const { email, password, isGoogleLogin, name, photoURL } = req.body;
@@ -121,18 +134,15 @@ async function run() {
           }
         }
 
+        // Generate JWT containing { userId: user._id }
         const token = jwt.sign(
-          { id: user._id.toString(), email: user.email },
+          { userId: user._id.toString(), id: user._id.toString(), email: user.email },
           process.env.JWT_SECRET,
           { expiresIn: '7d' }
         );
 
-        res.cookie('token', token, {
-          httpOnly: true,
-          secure: process.env.NODE_ENV === 'production',
-          sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-          maxAge: 7 * 24 * 60 * 60 * 1000
-        }).json({
+        // Store token in HTTP-only cookie
+        res.cookie('token', token, cookieOptions).json({
           success: true,
           message: 'Login successful',
           user: {
@@ -147,13 +157,9 @@ async function run() {
       }
     });
 
-    // 3. Logout Route
+    // 3. Logout Route (PDF 7.1: clears cookie using res.clearCookie('token'))
     app.post('/api/auth/logout', (req, res) => {
-      res.clearCookie('token', {
-        httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax'
-      }).json({ success: true, message: 'Logged out successfully' });
+      res.clearCookie('token', cookieOptions).json({ success: true, message: 'Logged out successfully' });
     });
 
     // 4. Current User Session Check
@@ -191,34 +197,53 @@ async function run() {
       }
     });
 
-    // 6. Get All Rooms (with search, category, sort)
+// 6. Get All Rooms (PDF 7.2: Search by name using $regex, Amenities using $in, Price Range using $gte/$lte, and Sorting)
     app.get('/api/rooms', async (req, res) => {
       try {
-        const { search, category, sort } = req.query;
+        const { search, category, amenities, minPrice, maxPrice, sort } = req.query;
         let query = {};
 
+        // 1. PDF 7.2: $regex → search by name/title
         if (search) {
-          query.$or = [
-            { title: { $regex: search, $options: 'i' } },
-            { description: { $regex: search, $options: 'i' } },
-            { location: { $regex: search, $options: 'i' } }
-          ];
+          query.title = { $regex: search, $options: 'i' };
         }
 
+        // 2. Category Filter
         if (category && category !== 'All') {
           query.category = category;
         }
 
-        let sortOption = {};
-        if (sort === 'price-asc') sortOption = { pricePerHour: 1 };
-        if (sort === 'price-desc') sortOption = { pricePerHour: -1 };
+        // 3. PDF 7.2: $in → amenities filter
+        if (amenities) {
+          const amenitiesArray = Array.isArray(amenities)
+            ? amenities
+            : amenities.split(',').map((a) => a.trim()).filter(Boolean);
+
+          if (amenitiesArray.length > 0) {
+            query.amenities = { $in: amenitiesArray };
+          }
+        }
+
+        // 4. PDF 7.2: $gte, $lte → price range filtering
+        if (minPrice || maxPrice) {
+          query.pricePerHour = {};
+          if (minPrice) query.pricePerHour.$gte = Number(minPrice);
+          if (maxPrice) query.pricePerHour.$lte = Number(maxPrice);
+        }
+
+        // 5. Sorting
+        let sortOption = { createdAt: -1 };
+        if (sort === 'low-high') sortOption = { pricePerHour: 1 };
+        if (sort === 'high-low') sortOption = { pricePerHour: -1 };
 
         const rooms = await roomsCollection.find(query).sort(sortOption).toArray();
         res.json({ success: true, count: rooms.length, data: rooms });
       } catch (error) {
+        console.error('Fetch rooms error:', error);
         res.status(500).json({ success: false, message: 'Failed to fetch rooms', error: error.message });
       }
     });
+
 
     // 7. User's Created Listings (Robust Filter)
     app.get('/api/my-rooms', verifyToken, async (req, res) => {
@@ -259,7 +284,7 @@ async function run() {
       }
     });
 
-    // 9. Create a New Room Listing
+    // 9. Create a New Room Listing (Private)
     app.post('/api/rooms', verifyToken, async (req, res) => {
       try {
         const { title, description, floor, pricePerHour, capacity, amenities, image, images } = req.body;
@@ -289,7 +314,7 @@ async function run() {
       }
     });
 
-    // 10. Update Room Listing
+    // 10. Update Room Listing (Private, Ownership Verified)
     app.patch('/api/rooms/:id', verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
@@ -327,7 +352,7 @@ async function run() {
       }
     });
 
-    // 11. Delete Room Listing
+    // 11. Delete Room Listing (Private, Ownership Verified)
     app.delete('/api/rooms/:id', verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
@@ -350,7 +375,7 @@ async function run() {
       }
     });
 
-    // 12. Booking Creation
+    // 12. Booking Creation (Private)
     app.post('/api/bookings', verifyToken, async (req, res) => {
       try {
         const { 
@@ -439,6 +464,12 @@ async function run() {
           { $inc: { bookingCount: 1 } }
         );
 
+        // User's bookings array update
+        await usersCollection.updateOne(
+          { _id: new ObjectId(req.user.id) },
+          { $push: { bookings: result.insertedId } }
+        );
+
         res.status(201).json({
           success: true,
           message: 'Room booked successfully!',
@@ -455,7 +486,7 @@ async function run() {
       }
     });
 
-    // 13. Get User's Own Bookings (Populated with room details via $lookup)
+    // 13. Get User's Own Bookings (Private, Populated with room details via $lookup)
     app.get('/api/bookings/my-bookings', verifyToken, async (req, res) => {
       try {
         const userEmail = req.user.email;
@@ -523,14 +554,13 @@ async function run() {
       }
     });
 
-// 14. Cancel a Booking (Server verifies ownership, updates status, $pull from user, and decrements room bookingCount)
+    // 14. Cancel a Booking (Private, verifies ownership, updates status, $pull from user, decrements room count)
     app.patch('/api/bookings/:id/cancel', verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const userEmail = req.user.email;
         const userId = req.user.id;
 
-        // ১. ভেরিফিকেশন: বুকিংটি আসলেই এই ইউজারের কি না
         const booking = await bookingsCollection.findOne({
           _id: new ObjectId(id),
           $or: [{ userEmail }, { userId }]
@@ -544,19 +574,18 @@ async function run() {
           return res.status(400).json({ success: false, message: 'Booking is already cancelled' });
         }
 
-        // ২. বুকিং স্ট্যাটাস "cancelled" করা
         await bookingsCollection.updateOne(
           { _id: new ObjectId(id) },
           { $set: { status: 'cancelled', cancelledAt: new Date() } }
         );
 
-        // ৩. Requirement 5.3: Uses $pull to remove the booking ID from the user’s bookings array
+        // $pull to remove booking ID from user's bookings array
         await usersCollection.updateOne(
           { $or: [{ email: userEmail }, { _id: new ObjectId(userId) }] },
           { $pull: { bookings: new ObjectId(id) } }
         );
 
-        // ৪. (Recommended/Optional): রুমের bookingCount ১ কমানো
+        // Decrement room's bookingCount
         if (booking.roomId) {
           try {
             await roomsCollection.updateOne(
