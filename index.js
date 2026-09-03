@@ -167,6 +167,24 @@ async function run() {
       }
     });
 
+    app.get('/api/featured-rooms', async (req, res) => {
+      try {
+        const rooms = await roomsCollection
+          .find({})
+          .sort({ createdAt: -1 }) // লেটেস্ট রুম আগে আনবে
+          .limit(6)               // সর্বোচ্চ ৬টি রুম
+          .toArray();
+
+        res.json({ success: true, count: rooms.length, data: rooms });
+      } catch (error) {
+        res.status(500).json({ 
+          success: false, 
+          message: 'Failed to fetch featured rooms', 
+          error: error.message 
+        });
+      }
+    });
+
     // 5. Get All Rooms (with search, category, sort)
     app.get('/api/rooms', async (req, res) => {
       try {
