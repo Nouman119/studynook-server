@@ -183,10 +183,10 @@ async function run() {
 
         res.json({ success: true, count: rooms.length, data: rooms });
       } catch (error) {
-        res.status(500).json({ 
-          success: false, 
-          message: 'Failed to fetch featured rooms', 
-          error: error.message 
+        res.status(500).json({
+          success: false,
+          message: 'Failed to fetch featured rooms',
+          error: error.message
         });
       }
     });
@@ -220,8 +220,7 @@ async function run() {
       }
     });
 
-    // 7. User's Created Listings (Filtered by owner ID or email)
-// 7. User's Created Listings (Robust Filter)
+    // 7. User's Created Listings (Robust Filter)
     app.get('/api/my-rooms', verifyToken, async (req, res) => {
       try {
         const userId = req.user.id;
@@ -260,7 +259,7 @@ async function run() {
       }
     });
 
-    // 9. Create a New Room Listing (owner set to req.user.id)
+    // 9. Create a New Room Listing
     app.post('/api/rooms', verifyToken, async (req, res) => {
       try {
         const { title, description, floor, pricePerHour, capacity, amenities, image, images } = req.body;
@@ -290,7 +289,7 @@ async function run() {
       }
     });
 
-    // 10. Update Room Listing (Server-side ownership verification)
+    // 10. Update Room Listing
     app.patch('/api/rooms/:id', verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
@@ -303,7 +302,6 @@ async function run() {
           return res.status(404).json({ success: false, message: 'Room not found' });
         }
 
-        // Ownership Check: Comparing req.user.id with room's owner
         if (room.owner !== userId && room.ownerEmail !== userEmail) {
           return res.status(403).json({ success: false, message: 'Unauthorized: You can only edit your own rooms' });
         }
@@ -329,7 +327,7 @@ async function run() {
       }
     });
 
-    // 11. Delete Room Listing (Server-side ownership verification)
+    // 11. Delete Room Listing
     app.delete('/api/rooms/:id', verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
@@ -341,7 +339,6 @@ async function run() {
           return res.status(404).json({ success: false, message: 'Room not found' });
         }
 
-        // Ownership Check: Comparing req.user.id with room's owner
         if (room.owner !== userId && room.ownerEmail !== userEmail) {
           return res.status(403).json({ success: false, message: 'Unauthorized: You can only delete your own rooms' });
         }
@@ -353,7 +350,7 @@ async function run() {
       }
     });
 
-    // 12. Booking Creation ($gte & $lte Overlap Conflict Check)
+    // 12. Booking Creation
     app.post('/api/bookings', verifyToken, async (req, res) => {
       try {
         const { 
@@ -363,8 +360,10 @@ async function run() {
           endTime, 
           totalPrice, 
           date, 
+          rawDate,
           timeSlot, 
-          price 
+          price,
+          specialNote
         } = req.body;
 
         let bookingStart;
@@ -397,7 +396,7 @@ async function run() {
           });
         }
 
-        // Overlap Conflict Check
+        // Conflict Check
         const conflictingBooking = await bookingsCollection.findOne({
           roomId: roomId,
           status: 'confirmed',
@@ -420,18 +419,21 @@ async function run() {
           userEmail: req.user.email,
           userId: req.user.id,
           userName: req.body.userName || req.user.email,
-          date: date || bookingStart.toISOString().split('T')[0],
-          timeSlot: timeSlot || `${bookingStart.toLocaleTimeString()} - ${bookingEnd.toLocaleTimeString()}`,
+          date: req.body.date,
+          rawDate: rawDate || (date && date.includes('-') ? date : bookingStart.toISOString().split('T')[0]),
+          timeSlot: req.body.timeSlot,
           startTime: bookingStart,
           endTime: bookingEnd,
           price: finalPrice,
           totalPrice: finalPrice,
+          specialNote: req.body.specialNote || specialNote || '',
           status: 'confirmed',
           createdAt: new Date()
         };
 
         const result = await bookingsCollection.insertOne(newBooking);
 
+        // Increments bookingCount for room
         await roomsCollection.updateOne(
           { _id: new ObjectId(roomId) },
           { $inc: { bookingCount: 1 } }
@@ -453,43 +455,122 @@ async function run() {
       }
     });
 
-    // 13. Get User's Own Bookings
+    // 13. Get User's Own Bookings (Populated with room details via $lookup)
     app.get('/api/bookings/my-bookings', verifyToken, async (req, res) => {
       try {
         const userEmail = req.user.email;
+        const userId = req.user.id;
+
         const myBookings = await bookingsCollection
-          .find({ userEmail })
-          .sort({ createdAt: -1 })
+          .aggregate([
+            {
+              $match: {
+                $or: [{ userEmail: userEmail }, { userId: userId }]
+              }
+            },
+            {
+              $addFields: {
+                convertedRoomId: {
+                  $convert: { input: "$roomId", to: "objectId", onError: null, onNull: null }
+                }
+              }
+            },
+            {
+              $lookup: {
+                from: 'rooms',
+                localField: 'convertedRoomId',
+                foreignField: '_id',
+                as: 'roomDetails'
+              }
+            },
+            {
+              $unwind: {
+                path: '$roomDetails',
+                preserveNullAndEmptyArrays: true
+              }
+            },
+            {
+              $project: {
+                _id: 1,
+                roomId: 1,
+                roomTitle: { $ifNull: ["$roomTitle", "$roomDetails.title"] },
+                roomImage: {
+                  $ifNull: [
+                    "$roomImage",
+                    { $ifNull: ["$roomDetails.image", { $arrayElemAt: ["$roomDetails.images", 0] }] }
+                  ]
+                },
+                date: 1,
+                rawDate: 1,
+                timeSlot: 1,
+                startTime: 1,
+                endTime: 1,
+                price: 1,
+                totalPrice: 1,
+                status: 1,
+                specialNote: 1,
+                createdAt: 1
+              }
+            },
+            { $sort: { createdAt: -1 } }
+          ])
           .toArray();
 
         res.json({ success: true, count: myBookings.length, data: myBookings });
       } catch (error) {
+        console.error('Fetch my bookings error:', error);
         res.status(500).json({ success: false, message: 'Failed to fetch your bookings', error: error.message });
       }
     });
 
-    // 14. Cancel a Booking
+// 14. Cancel a Booking (Server verifies ownership, updates status, $pull from user, and decrements room bookingCount)
     app.patch('/api/bookings/:id/cancel', verifyToken, async (req, res) => {
       try {
         const { id } = req.params;
         const userEmail = req.user.email;
+        const userId = req.user.id;
 
+        // ১. ভেরিফিকেশন: বুকিংটি আসলেই এই ইউজারের কি না
         const booking = await bookingsCollection.findOne({
           _id: new ObjectId(id),
-          userEmail
+          $or: [{ userEmail }, { userId }]
         });
 
         if (!booking) {
           return res.status(404).json({ success: false, message: 'Booking not found or unauthorized' });
         }
 
+        if (booking.status === 'cancelled') {
+          return res.status(400).json({ success: false, message: 'Booking is already cancelled' });
+        }
+
+        // ২. বুকিং স্ট্যাটাস "cancelled" করা
         await bookingsCollection.updateOne(
           { _id: new ObjectId(id) },
           { $set: { status: 'cancelled', cancelledAt: new Date() } }
         );
 
-        res.json({ success: true, message: 'Booking cancelled successfully' });
+        // ৩. Requirement 5.3: Uses $pull to remove the booking ID from the user’s bookings array
+        await usersCollection.updateOne(
+          { $or: [{ email: userEmail }, { _id: new ObjectId(userId) }] },
+          { $pull: { bookings: new ObjectId(id) } }
+        );
+
+        // ৪. (Recommended/Optional): রুমের bookingCount ১ কমানো
+        if (booking.roomId) {
+          try {
+            await roomsCollection.updateOne(
+              { _id: new ObjectId(booking.roomId), bookingCount: { $gt: 0 } },
+              { $inc: { bookingCount: -1 } }
+            );
+          } catch (err) {
+            console.error('Room count decrement error:', err);
+          }
+        }
+
+        res.json({ success: true, message: 'Booking cancelled' });
       } catch (error) {
+        console.error('Cancel booking error:', error);
         res.status(500).json({ success: false, message: 'Failed to cancel booking', error: error.message });
       }
     });
