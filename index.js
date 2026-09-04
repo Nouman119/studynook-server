@@ -17,7 +17,6 @@ const allowedOrigins = [
   process.env.CLIENT_URL
 ].filter(Boolean);
 
-// CORS মিডলওয়্যার ও প্রি-ফ্লাইট হ্যান্ডলার
 app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (!origin || allowedOrigins.includes(origin)) {
