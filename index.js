@@ -11,13 +11,22 @@ const bookingsRoutes = require('./routes/bookings');
 const app = express();
 const port = process.env.PORT || 5000;
 
-app.use(cors({
-  origin: [
-    'http://localhost:3000',
-    process.env.CLIENT_URL
-  ].filter(Boolean),
-  credentials: true
-}));
+// CORS Configuration
+const allowedOrigins = [
+  'http://localhost:3000',
+  'https://studynook-client-kappa.vercel.app',
+  process.env.CLIENT_URL
+].filter(Boolean);
+
+const corsOptions = {
+  origin: allowedOrigins,
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); 
 
 app.use(express.json());
 app.use(cookieParser());
@@ -34,6 +43,7 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     await client.connect();
+    console.log('Connected to MongoDB successfully');
 
     const db = client.db('studynookDB');
     const usersCollection = db.collection('users');
@@ -48,13 +58,13 @@ async function run() {
       res.send('StudyNook API Server is running smoothly.');
     });
 
-    app.listen(port, () => {
-      console.log(`StudyNook Server running on port ${port}`);
-    });
-
   } catch (error) {
     console.error('Database connection error:', error);
   }
 }
 
 run().catch(console.dir);
+
+app.listen(port, () => {
+  console.log(`StudyNook Server running on port ${port}`);
+});
