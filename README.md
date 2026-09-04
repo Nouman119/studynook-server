@@ -1,5 +1,3 @@
-
-```markdown
 # ⚙️ StudyNook API – Backend Service
 
 StudyNook Backend is a secure RESTful API service built with Express.js and MongoDB to support authentication, room catalog management, and automated booking reservation workflows.
@@ -27,4 +25,3 @@ StudyNook Backend is a secure RESTful API service built with Express.js and Mong
 * **CORS Management:** Express CORS with origin whitelisting & credentials
 * **Deployment:** Render
 
----
