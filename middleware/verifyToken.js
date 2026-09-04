@@ -1,22 +1,22 @@
 const jwt = require('jsonwebtoken');
 
 const verifyToken = (req, res, next) => {
-  const token = req.cookies?.token || req.headers?.authorization?.split(' ')[1];
+  const authHeader = req.headers.authorization;
+  const headerToken = authHeader && authHeader.startsWith('Bearer ') 
+    ? authHeader.split(' ')[1] 
+    : null;
+
+  const token = req.cookies?.token || headerToken;
 
   if (!token) {
-    return res.status(401).json({ success: false, message: 'Unauthorized access: No token provided' });
+    return res.status(401).json({ success: false, message: 'Unauthorized access, token missing' });
   }
 
   jwt.verify(token, process.env.JWT_SECRET, (err, decoded) => {
     if (err) {
-      return res.status(401).json({ success: false, message: 'Unauthorized access: Invalid or expired token' });
+      return res.status(401).json({ success: false, message: 'Invalid or expired token' });
     }
-    const resolvedId = decoded.userId || decoded.id;
-    req.user = {
-      id: resolvedId,
-      userId: resolvedId,
-      email: decoded.email
-    };
+    req.user = decoded;
     next();
   });
 };

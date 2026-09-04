@@ -8,13 +8,13 @@ const router = express.Router();
 
 const cookieOptions = {
   httpOnly: true,
-  secure: process.env.NODE_ENV === 'production',
-  sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'strict',
+  secure: true,
+  sameSite: 'none',
   maxAge: 7 * 24 * 60 * 60 * 1000
 };
 
-module.exports = function(usersCollection) {
-  
+module.exports = function (usersCollection) {
+
   router.post('/register', async (req, res) => {
     try {
       const { name, email, photoURL, password } = req.body;
@@ -87,6 +87,7 @@ module.exports = function(usersCollection) {
       res.cookie('token', token, cookieOptions).json({
         success: true,
         message: 'Login successful',
+        token,
         user: {
           id: user._id,
           name: user.name,
